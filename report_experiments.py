@@ -156,6 +156,7 @@ def plot_metrics(metrics_df, filename, config):
     plt.close()
 
 def update_config(config, key_path, value):
+    """Updates a nested dictionary using a dot-separated key path."""
     keys = key_path.split('.')
     d = config
     for key in keys[:-1]:
@@ -164,7 +165,7 @@ def update_config(config, key_path, value):
     return config
 
 
-###  2. The Experiment Runner
+###  2. The Core Experiment Runner
 def run_single_experiment(config, seed, data_artifacts, exp_tag):
     """Runs a single experiment for a given config and seed."""
     df, states, fair_pairs, static_feats, ordered_feats, proxy_model = data_artifacts
@@ -240,10 +241,31 @@ if __name__ == '__main__':
     # Create output directories from config
     os.makedirs(base_config['file_paths']['metrics_output_dir'], exist_ok=True)
     os.makedirs(base_config['file_paths']['plots_output_dir'], exist_ok=True)
+
+    seeds = base_config['training']['seeds']
+
+    ### FIRST RUN BASELINES
+    print("\n\n--- Running Explicit Baseline (lambda=0, drift=0) ---")
+    baseline_config = copy.deepcopy(base_config)
     
+    # Manually set BOTH baseline conditions
+    update_config(baseline_config, 'fair_dqn_params.lambda_fair', 0.0)
+    
+    # Find the 'no_drift' setting in the experiment sweeps to use it
+    no_drift_setting = next((item for item in base_config['experiment_sweeps']['drift_logic'] if item['name'] == 'no_drift'), None)
+    baseline_config['drift_logic'] = no_drift_setting['value']
+
+    for seed in seeds:
+        # Use a special tag for the baseline
+        baseline_exp_tag = f"baseline_seed{seed}"
+        run_single_experiment(baseline_config, seed, data_artifacts, baseline_exp_tag)
+    
+    print("\n--- Baseline Runs Finished. Starting Parameter Sweeps. ---")
+
+    ### THEN RUN EXPERIMENTS
     # Get experiment definitions from config
     sweeps = base_config['experiment_sweeps']
-    seeds = base_config['training']['seeds']
+    
 
     # Loop through each parameter sweep defined in the config
     for param_path, values in sweeps.items():
