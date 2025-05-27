@@ -1,6 +1,7 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np
 import os
 
 ### Baselines
@@ -102,6 +103,7 @@ axes[1, 1].legend()
 plt.tight_layout()
 plt.savefig("report_plots/baseline_combined.png")
 plt.show()
+
 
 ### Lambda sweeps
 
@@ -489,11 +491,6 @@ plt.savefig("report_plots/drift_sweep_drift.png")
 plt.show()
 
 ### PENALTY PARAMETER SWEEPS
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
-import os
 
 # Directory containing fairness regularization parameter sensitivity metrics
 metrics_dir = 'metrics/'
@@ -591,7 +588,6 @@ for i, metric in enumerate(metrics_to_plot, 1):
     plt.subplot(3, 1, i)
     valid_combinations = [(32, 1.0), (128, 0.0), (128, 0.5), (128, 1.0)]
     
-    # Corrected indentation
     for batch_size, weighted_frac in valid_combinations:
         sub_df = grouped_df[(grouped_df['batch_size'] == batch_size) & (grouped_df['weighted_frac'] == weighted_frac)]
         plt.plot(sub_df['step'], sub_df[metric], label=f"Batch {batch_size}, WF {weighted_frac}")
