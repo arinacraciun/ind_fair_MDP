@@ -5,100 +5,78 @@ import pandas as pd
 import torch
 import matplotlib.pyplot as plt
 from sklearn.neighbors import NearestNeighbors
-from stable_baselines3.dqn.dqn import DQN as BaseDQN
-from stable_baselines3 import DQN
-from gymnasium import spaces
+import yaml
+import copy 
+
+# Import custom classes from the other file
 from one_run import (
     EpisodicFairnessEnv,
     FairDQN,
     FairnessEvalCallback,
     train_and_save_proxy_model,
-    load_proxy_model
+    get_or_train_proxy_model
 )
 
-# ---------------------------
-# 1. Customizable parameters
-# ---------------------------
-# Experiment values
-LAMBDA_VALUES = [0.0, 1.0, 5.0]
-BATCH_SIZE_PAIRS_VALUES = [32, 128]
-WEIGHTED_FRAC_VALUES = [0.0, 0.5, 1.0]
-DRIFT_SETTINGS_LIST = [
-    {'capital_gain_pct': 0.0, 'capital_loss_pct': 0.0},  # No drift
-    {'capital_gain_pct': 5.0, 'capital_loss_pct': 5.0},  # Low
-    {'capital_gain_pct': 10.0, 'capital_loss_pct': 10.0},# Medium
-    {'capital_gain_pct': 20.0, 'capital_loss_pct': 20.0} # High
-]
-# Common parameters
-SEEDS = [42, 43, 44]
-TOTAL_TIMESTEPS = 25_000
-EVAL_FREQ = 1000
-N_EVAL_REWARD = 50
-N_EVAL_GROUP = 100
+### 1. Helper Functions
 
-# Data & environment settings
-DATA_PATH = "cleaned_adult.csv"
-TARGET_COLUMN_ORIGINAL = 'income'
-TARGET_COLUMN_PROXY = 'income_binary_gt_50k'
-DRIFTABLE_FEATURES = ['capital.gain', 'capital.loss']
+def prepare_data(config):
+    """Prepares data based on the loaded configuration."""
+    cols = config['dataset_columns']
+    knn_cfg = config['knn_settings']
+    proxy_path = config['file_paths']['proxy_model']
+    
+    df = pd.read_csv(config['file_paths']['input_data'])
+    
+    # Binarize target
+    target_proxy_col = f"{cols['target_original']}_binary"
+    df[target_proxy_col] = (df[cols['target_original']] == cols['target_positive_class']).astype(int)
 
-# Output dirs
-METRICS_DIR = "metrics"
-PLOTS_DIR = "plots"
-os.makedirs(METRICS_DIR, exist_ok=True)
-os.makedirs(PLOTS_DIR, exist_ok=True)
+    # Define feature lists from config
+    potential_features = [c for c in df.columns if c not in [cols['target_original'], target_proxy_col]]
+    static_feats = [c for c in potential_features if c not in cols['driftable_features']]
+    ordered_feats = static_feats + cols['driftable_features']
+    
+    states = df[ordered_feats].values.astype(np.float32)
 
-# -----------------------------------
-# 2. Helper functions for setup
-# -----------------------------------
-def prepare_data():
-    df = pd.read_csv(DATA_PATH)
-    df[TARGET_COLUMN_PROXY] = (df[TARGET_COLUMN_ORIGINAL] == '>50K').astype(int)
-
-    all_cols = df.columns.tolist()
-    potential = [c for c in all_cols if c not in [TARGET_COLUMN_ORIGINAL, TARGET_COLUMN_PROXY]]
-    static_feats = [c for c in potential if c not in DRIFTABLE_FEATURES]
-    ordered = static_feats + DRIFTABLE_FEATURES
-
-    states = df[ordered].values.astype(np.float32)
-
-    # kNN pairs
-    k = 5; sigma = 1.0
-    nbrs = NearestNeighbors(n_neighbors=k).fit(states)
+    # kNN pairs from config
+    nbrs = NearestNeighbors(n_neighbors=knn_cfg['k_neighbors']).fit(states)
     dists, idxs = nbrs.kneighbors(states)
-    sims = np.exp(- (dists**2) / (sigma**2))
+    sims = np.exp(-(dists**2) / (knn_cfg['sigma']**2))
     fair_pairs = [(i, int(idxs[i, j]), float(sims[i, j]))
                   for i in range(states.shape[0])
-                  for j in range(k)]
+                  for j in range(knn_cfg['k_neighbors'])]
 
-    # Ensure proxy model
-    proxy_path = "proxy_logistic_model.joblib"
-    try:
-        proxy = load_proxy_model(proxy_path)
-    except FileNotFoundError:
-        proxy = train_and_save_proxy_model(df, static_feats, TARGET_COLUMN_PROXY, proxy_path)
+    # Ensure proxy model exists
+    proxy_model = get_or_train_proxy_model(
+        model_path=proxy_path,
+        df_train=df,
+        static_feature_names_list=static_feats,
+        target_column_name_proxy=target_proxy_col
+    )
 
-    return df, states, fair_pairs, static_feats, ordered
+    return df, states, fair_pairs, static_feats, ordered_feats, proxy_model
 
-
-def make_env_fn(df, static_feats, ordered, drift_cfg, proxy):
+def make_env_fn(config, df, static_feats, ordered_feats, proxy_model):
+    """Creates an environment creation function from a given config."""
+    cols = config['dataset_columns']
+    
     def _fn():
+        # Using the generic drift_logic from the config
         return EpisodicFairnessEnv(
             full_dataset_df=df.copy(),
             static_feature_names_list=static_feats,
-            driftable_feature_names_list=DRIFTABLE_FEATURES,
-            ordered_feature_names_list=ordered,
-            target_column_name_for_proxy_training=TARGET_COLUMN_PROXY,
-            proxy_model=proxy,
-            max_episode_steps=10,
-            drift_config=drift_cfg
+            driftable_feature_names_list=cols['driftable_features'],
+            ordered_feature_names_list=ordered_feats,
+            target_column_name_for_proxy_training=f"{cols['target_original']}_binary",
+            proxy_model=proxy_model,
+            drift_logic=config['drift_logic']
         )
     return _fn
 
-
-def plot_metrics(metrics_df, filename):
+def plot_metrics(metrics_df, filename, config):
+    """Plots all metrics and drifts."""
     plt.figure(figsize=(36, 12))
-
+    
     ax = plt.subplot(2, 5, 1)
     ax.plot(metrics_df["step"], metrics_df["mean_reward_vs_Yproxy"], label="Mean Reward (vs Y_proxy)")
     ax.set_xlabel("Timestep")
@@ -161,193 +139,134 @@ def plot_metrics(metrics_df, filename):
     ax.legend()
     ax.set_title("False Positive Rates by Group (Episodic)")
 
-    ax = plt.subplot(2, 5, 9)
-    ax.plot(metrics_df["step"], metrics_df["drift_pct_capital_gain_grp0"], label="Group 0")
-    ax.plot(metrics_df["step"], metrics_df["drift_pct_capital_gain_grp1"], label="Group 1")
-    ax.set_xlabel("Timestep")
-    ax.set_ylabel("% Drift")
-    ax.legend()
-    ax.set_title("Average % Drift: capital.gain")
-
-    ax = plt.subplot(2, 5, 10)
-    ax.plot(metrics_df["step"], metrics_df["drift_pct_capital_loss_grp0"], label="Group 0")
-    ax.plot(metrics_df["step"], metrics_df["drift_pct_capital_loss_grp1"], label="Group 1")
-    ax.set_xlabel("Timestep")
-    ax.set_ylabel("% Drift")
-    ax.legend()
-    ax.set_title("Average % Drift: capital.loss")
+    # Drift Plots
+    driftable_features = config['dataset_columns']['driftable_features']
+    for i, feat in enumerate(driftable_features):
+        plot_index = 9 + i
+        
+        ax = plt.subplot(2, 5, plot_index)
+        safe_feat_name = feat.replace('.', '_')
+        ax.plot(metrics_df["step"], metrics_df[f"drift_pct_{safe_feat_name}_grp0"], label="Group 0")
+        ax.plot(metrics_df["step"], metrics_df[f"drift_pct_{safe_feat_name}_grp1"], label="Group 1")
+        ax.set_xlabel("Timestep"); ax.set_ylabel("% Drift"); ax.legend()
+        ax.set_title(f"Average % Drift: {feat}")
 
     plt.tight_layout()
     plt.savefig(filename)
     plt.close()
 
+def update_config(config, key_path, value):
+    keys = key_path.split('.')
+    d = config
+    for key in keys[:-1]:
+        d = d[key]
+    d[keys[-1]] = value
+    return config
 
-# -----------------------------------
-# 3. Core runner
-# -----------------------------------
-def run_experiment(param_name, values, df, states, fair_pairs, static_feats, ordered):
-    proxy_path = "proxy_logistic_model.joblib"
-    proxy = load_proxy_model(proxy_path)
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    for val in values:
-        for seed in SEEDS:
-            torch.manual_seed(seed)
-            np.random.seed(seed)
-            random.seed(seed)
+###  2. The Experiment Runner
+def run_single_experiment(config, seed, data_artifacts, exp_tag):
+    """Runs a single experiment for a given config and seed."""
+    df, states, fair_pairs, static_feats, ordered_feats, proxy_model = data_artifacts
+    h_params = config['fair_dqn_params']
+    eval_cfg = config['evaluation']
+    cols = config['dataset_columns']
+    
+    print(f"\n--- Running Experiment: {exp_tag} ---")
 
-            # Build drift settings or hyperparams
-            drift_cfg = (val if param_name == 'drift' else DRIFT_SETTINGS_LIST[1])
-            lambda_fair = val if param_name == 'lambda' else 1.0
-            batch_pairs = val if param_name == 'batch_size_pairs' else 128
-            wfrac = val if param_name == 'weighted_frac' else 1
+    # Set seeds for this specific run
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
 
-            exp_tag = f"{param_name}_{str(val).replace(' ','')}_seed{seed}"
+    # Create environment and model from config
+    env_fn = make_env_fn(config, df, static_feats, ordered_feats, proxy_model)
+    train_env = env_fn()
+    train_env.reset(seed=seed)
+    
+    device = config['training']['device']
+    if device == 'auto':
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-            # Create env & model
-            env_fn = make_env_fn(df, static_feats, ordered, drift_cfg, proxy)
-            train_env = env_fn()
-            train_env.reset(seed=seed)
+    model = FairDQN(
+        "MlpPolicy", train_env,
+        all_dataset_states=states,
+        fair_pairs_list=fair_pairs,
+        seed=seed,
+        verbose=0,
+        device=device,
+        **h_params
+    )
 
-            model = FairDQN(
-                "MlpPolicy", train_env,
-                all_dataset_states=states,
-                fair_pairs_list=fair_pairs,
-                lambda_fair=lambda_fair,
-                batch_size_pairs=batch_pairs,
-                weighted_frac=wfrac,
-                learning_rate=1e-3,
-                buffer_size=100_000,
-                learning_starts=5_000,
-                batch_size=256,
-                train_freq=2,
-                gradient_steps=1,
-                target_update_interval=1_000,
-                exploration_fraction=0.1,
-                exploration_initial_eps=1.0,
-                exploration_final_eps=0.05,
-                tau=0.005,
-                gamma=0.99,
-                seed=seed,
-                verbose=0,
-                device=device
-            )
+    callback = FairnessEvalCallback(
+        full_df=df,
+        initial_undrifted_states=states,
+        fair_pairs_list=fair_pairs,
+        true_labels_initial=df[f"{cols['target_original']}_binary"].values,
+        sensitive_feature_name=cols['sensitive_attribute'],
+        all_feature_names_ordered_list=ordered_feats,
+        driftable_feature_names_list=cols['driftable_features'],
+        eval_env_creator=env_fn,
+        **eval_cfg
+    )
 
-            # Callback
-            callback = FairnessEvalCallback(
-                initial_undrifted_states=states,
-                fair_pairs_list=fair_pairs,
-                true_labels_initial=df[TARGET_COLUMN_PROXY].values,
-                sensitive_feature_name='sex',
-                all_feature_names_ordered_list=ordered,
-                driftable_feature_names_list=DRIFTABLE_FEATURES,
-                eval_env_creator=env_fn,
-                eval_freq=EVAL_FREQ,
-                n_eval_episodes_reward=N_EVAL_REWARD,
-                n_eval_episodes_group_fairness=N_EVAL_GROUP,
-                verbose=0
-            )
+    # Train the model
+    model.learn(total_timesteps=config['training']['total_timesteps'], callback=callback)
+    train_env.close()
 
-            # Train
-            model.learn(total_timesteps=TOTAL_TIMESTEPS, callback=callback)
-            train_env.close()
+    # Save results
+    metrics_df = callback.get_metrics_log_df()
+    metrics_df = metrics_df[metrics_df['step'] > model.learning_starts].reset_index(drop=True)
 
-            # Collect metrics
-            metrics_df = callback.get_metrics_log_df()
-            metrics_df = metrics_df[metrics_df['step'] > model.learning_starts].reset_index(drop=True)
+    csv_path = os.path.join(config['file_paths']['metrics_output_dir'], f"metrics_{exp_tag}.csv")
+    metrics_df.to_csv(csv_path, index=False)
 
-            # Save
-            csv_path = os.path.join(METRICS_DIR, f"metrics_{exp_tag}.csv")
-            metrics_df.to_csv(csv_path, index=False)
+    plot_path = os.path.join(config['file_paths']['plots_output_dir'], f"plot_{exp_tag}.png")
+    plot_metrics(metrics_df, plot_path, config)
+    
+    print(f"Finished {exp_tag}. Results saved.")
 
-            plot_path = os.path.join(PLOTS_DIR, f"plot_{exp_tag}.png")
-            plot_metrics(metrics_df, plot_path)
 
-            print(f"Finished {exp_tag}, metrics -> {csv_path}, plot -> {plot_path}")
-
-# ---------------------------
-# 4. Main
-# ---------------------------
+### 3. Main
 if __name__ == '__main__':
-    df, states, fair_pairs, static_feats, ordered = prepare_data()
+    # Load the base configuration
+    with open('config_experiments.yaml', 'r') as f:
+        base_config = yaml.safe_load(f)
 
-    print("\nRunning baseline (no fairness, no drift)...")
-    proxy_path = "proxy_logistic_model.joblib"
-    proxy = load_proxy_model(proxy_path)
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # Prepare data once
+    print("Preparing data, kNN pairs, and proxy model...")
+    data_artifacts = prepare_data(base_config)
+    
+    # Create output directories from config
+    os.makedirs(base_config['file_paths']['metrics_output_dir'], exist_ok=True)
+    os.makedirs(base_config['file_paths']['plots_output_dir'], exist_ok=True)
+    
+    # Get experiment definitions from config
+    sweeps = base_config['experiment_sweeps']
+    seeds = base_config['training']['seeds']
 
-    # use the first drift setting (zero) and default hyper‐params
-    baseline_drift = DRIFT_SETTINGS_LIST[0]  # {'capital_gain_pct':0.0,'capital_loss_pct':0.0}
-    baseline_lambda = 1.0
-    baseline_batch_pairs = 128
-    baseline_wfrac = 1.0
-
-    for seed in SEEDS:
-        torch.manual_seed(seed)
-        np.random.seed(seed)
-        random.seed(seed)
-
-        exp_tag = f"baseline_seed{seed}"
-        env_fn = make_env_fn(df, static_feats, ordered, baseline_drift, proxy)
-        train_env = env_fn()
-        train_env.reset(seed=seed)
-
-        model = FairDQN(
-            "MlpPolicy", train_env,
-            all_dataset_states=states,
-            fair_pairs_list=fair_pairs,
-            lambda_fair=baseline_lambda,
-            batch_size_pairs=baseline_batch_pairs,
-            weighted_frac=baseline_wfrac,
-            learning_rate=1e-3,
-            buffer_size=100_000,
-            learning_starts=5_000,
-            batch_size=256,
-            train_freq=2,
-            gradient_steps=1,
-            target_update_interval=1_000,
-            exploration_fraction=0.1,
-            exploration_initial_eps=1.0,
-            exploration_final_eps=0.05,
-            tau=0.005,
-            gamma=0.99,
-            seed=seed,
-            verbose=0,
-            device=device
-        )
-
-        callback = FairnessEvalCallback(
-            initial_undrifted_states=states,
-            fair_pairs_list=fair_pairs,
-            true_labels_initial=df[TARGET_COLUMN_PROXY].values,
-            sensitive_feature_name='sex',
-            all_feature_names_ordered_list=ordered,
-            driftable_feature_names_list=DRIFTABLE_FEATURES,
-            eval_env_creator=env_fn,
-            eval_freq=EVAL_FREQ,
-            n_eval_episodes_reward=N_EVAL_REWARD,
-            n_eval_episodes_group_fairness=N_EVAL_GROUP,
-            verbose=0
-        )
-
-        model.learn(total_timesteps=TOTAL_TIMESTEPS, callback=callback)
-        train_env.close()
-
-        # save & plot
-        metrics_df = callback.get_metrics_log_df()
-        metrics_df = metrics_df[metrics_df['step'] > model.learning_starts].reset_index(drop=True)
-
-        csv_path = os.path.join(METRICS_DIR, f"metrics_{exp_tag}.csv")
-        metrics_df.to_csv(csv_path, index=False)
-
-        plot_path = os.path.join(PLOTS_DIR, f"plot_{exp_tag}.png")
-        plot_metrics(metrics_df, plot_path)
-
-        print(f"Finished {exp_tag}, metrics -> {csv_path}, plot -> {plot_path}")
-
-    # Individual experiments
-    run_experiment('lambda', LAMBDA_VALUES, df, states, fair_pairs, static_feats, ordered)
-    run_experiment('batch_size_pairs', BATCH_SIZE_PAIRS_VALUES, df, states, fair_pairs, static_feats, ordered)
-    run_experiment('weighted_frac', WEIGHTED_FRAC_VALUES, df, states, fair_pairs, static_feats, ordered)
-    # For drift, pass special marker
-    run_experiment('drift', DRIFT_SETTINGS_LIST, df, states, fair_pairs, static_feats, ordered)
+    # Loop through each parameter sweep defined in the config
+    for param_path, values in sweeps.items():
+        for value_setting in values:
+            # Create a deep copy of the base config for each run
+            exp_config = copy.deepcopy(base_config)
+            
+            # The way we update the config depends on the parameter
+            if param_path == 'drift_logic':
+                # For complex objects like drift, the value is a dict with 'name' and 'value'
+                exp_config['drift_logic'] = value_setting['value']
+                param_value_str = value_setting['name']
+            else:
+                # For simple values, we update the nested dict
+                update_config(exp_config, param_path, value_setting)
+                param_value_str = str(value_setting)
+            
+            # Loop through all seeds for this configuration
+            for seed in seeds:
+                # Create a unique tag for this specific experiment run
+                exp_tag = f"{param_path.split('.')[-1]}_{param_value_str}_seed{seed}"
+                
+                # Run the experiment with the modified config
+                run_single_experiment(exp_config, seed, data_artifacts, exp_tag)
+                
+    print("\n\nAll experiments finished!")
