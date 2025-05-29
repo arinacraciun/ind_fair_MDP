@@ -3,604 +3,430 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import os
+from matplotlib.ticker import FormatStrFormatter
 
 ### Baselines
-# Load baseline data for each seed
-df42 = pd.read_csv('metrics/metrics_baseline_seed42.csv')
-df43 = pd.read_csv('metrics/metrics_baseline_seed43.csv')
-df44 = pd.read_csv('metrics/metrics_baseline_seed44.csv')
+df42 = pd.read_csv('experiments/metrics/metrics_baseline_seed42.csv')
+df43 = pd.read_csv('experiments/metrics/metrics_baseline_seed43.csv')
+df44 = pd.read_csv('experiments/metrics/metrics_baseline_seed44.csv')
+df42['seed'] = 42
+df43['seed'] = 43
+df44['seed'] = 44
+df_all = pd.concat([df42, df43, df44], ignore_index=True)
+metrics_to_summarize = [
+    "perf_success_rate_overall",
+    "perf_success_rate_group_0",
+    "perf_success_rate_group_1",
+    "indiv_fairness_cfd_initial",
+    "indiv_fairness_consistency_initial"
+]
+grouped = df_all.groupby("step")[metrics_to_summarize].agg(['mean', 'std']).reset_index()
+grouped.columns = ['step'] + [f"{metric}_{stat}" for metric in metrics_to_summarize for stat in ['mean', 'std']]
+for metric in metrics_to_summarize:
+    mean_col = f"{metric}_mean"
+    grouped[mean_col] = grouped[mean_col].rolling(window=3, min_periods=1).mean()
 
-# Merge dataframes
-all_dfs = [df42, df43, df44]
-merged_df = pd.concat(all_dfs)
+sns.set_theme(style="whitegrid")
+fig, axes = plt.subplots(1, 3, figsize=(20, 5))
 
-# Group by step and calculate mean and std for each metric
-grouped_df = merged_df.groupby("step").agg(
-    {
-        "mean_reward_vs_Yproxy": ["mean", "std"],
-        "cfd_on_initial": ["mean", "std"],
-        "consistency_on_initial": ["mean", "std"],
-        "dp_gap_episodic": ["mean", "std"],
-        "eo_tpr_gap_episodic": ["mean", "std"],
-        "eo_fpr_gap_episodic": ["mean", "std"]
-    }
-).reset_index()
+# Plot 1: Success Rate (overall and by group)
+for group in ['overall', 'group_0', 'group_1']:
+    mean_col = f"perf_success_rate_{group}_mean"
+    std_col = f"perf_success_rate_{group}_std"
+    axes[0].plot(grouped["step"], grouped[mean_col], label=f"Group {group}")
+    axes[0].fill_between(grouped["step"], 
+                         grouped[mean_col] - grouped[std_col],
+                         grouped[mean_col] + grouped[std_col], alpha=0.2)
+axes[0].set_title("Success Rate (Baseline)")
+axes[0].set_ylabel("Success Rate")
+axes[0].set_xlabel("Training Timesteps")
+axes[0].legend()
+axes[0].set_ylim(-0.05, 1.05)
 
-# Flatten multi-level columns for easier plotting
-grouped_df.columns = ['step', 
-                      'mean_reward_vs_Yproxy_mean', 'mean_reward_vs_Yproxy_std', 
-                      'cfd_on_initial_mean', 'cfd_on_initial_std',
-                      'consistency_on_initial_mean', 'consistency_on_initial_std',
-                      'dp_gap_episodic_mean', 'dp_gap_episodic_std',
-                      'eo_tpr_gap_episodic_mean', 'eo_tpr_gap_episodic_std',
-                      'eo_fpr_gap_episodic_mean', 'eo_fpr_gap_episodic_std']
+# Plot 2: CFD (initial)
+mean_col = "indiv_fairness_cfd_initial_mean"
+std_col = "indiv_fairness_cfd_initial_std"
+axes[1].plot(grouped["step"], grouped[mean_col], label="CFD (Initial)")
+axes[1].fill_between(grouped["step"], 
+                     grouped[mean_col] - grouped[std_col],
+                     grouped[mean_col] + grouped[std_col], alpha=0.2)
+axes[1].set_title("Counterfactual Fairness (Initial)")
+axes[1].set_ylabel("CFD")
+axes[1].set_xlabel("Training Timesteps")
+axes[1].legend()
 
-# Save summary stats to CSV for the report
-summary_file = 'report_metrics/baseline_summary.csv'
-grouped_df.to_csv(summary_file, index=False)
-
-# Create a single figure with 4 subplots
-fig, axes = plt.subplots(2, 2, figsize=(18, 14))
-
-# Plot 1: Mean Reward
-axes[0, 0].plot(grouped_df["step"], grouped_df["mean_reward_vs_Yproxy_mean"], label="Mean Reward vs Y_proxy")
-axes[0, 0].fill_between(grouped_df["step"], 
-                         grouped_df["mean_reward_vs_Yproxy_mean"] - grouped_df["mean_reward_vs_Yproxy_std"], 
-                         grouped_df["mean_reward_vs_Yproxy_mean"] + grouped_df["mean_reward_vs_Yproxy_std"], 
-                         alpha=0.2)
-axes[0, 0].set_title("Baseline - Mean Reward vs Y_proxy")
-axes[0, 0].set_xlabel("Training Steps")
-axes[0, 0].set_ylabel("Mean Reward")
-axes[0, 0].grid(True)
-axes[0, 0].legend()
-
-# Plot 2: Counterfactual Fairness Disparity (CFD)
-axes[0, 1].plot(grouped_df["step"], grouped_df["cfd_on_initial_mean"], label="CFD on Initial States")
-axes[0, 1].fill_between(grouped_df["step"], 
-                         grouped_df["cfd_on_initial_mean"] - grouped_df["cfd_on_initial_std"], 
-                         grouped_df["cfd_on_initial_mean"] + grouped_df["cfd_on_initial_std"], 
-                         alpha=0.2)
-axes[0, 1].set_title("Baseline - CFD on Initial States")
-axes[0, 1].set_xlabel("Training Steps")
-axes[0, 1].set_ylabel("CFD")
-axes[0, 1].grid(True)
-axes[0, 1].legend()
-
-# Plot 3: Consistency
-axes[1, 0].plot(grouped_df["step"], grouped_df["consistency_on_initial_mean"], label="Consistency on Initial States")
-axes[1, 0].fill_between(grouped_df["step"], 
-                         grouped_df["consistency_on_initial_mean"] - grouped_df["consistency_on_initial_std"], 
-                         grouped_df["consistency_on_initial_mean"] + grouped_df["consistency_on_initial_std"], 
-                         alpha=0.2)
-axes[1, 0].set_title("Baseline - Consistency on Initial States")
-axes[1, 0].set_xlabel("Training Steps")
-axes[1, 0].set_ylabel("Consistency")
-axes[1, 0].grid(True)
-axes[1, 0].legend()
-
-# Plot 4: Group Fairness (EO and DP gaps)
-axes[1, 1].plot(grouped_df["step"], grouped_df["dp_gap_episodic_mean"], label="DP Gap")
-axes[1, 1].fill_between(grouped_df["step"], 
-                         grouped_df["dp_gap_episodic_mean"] - grouped_df["dp_gap_episodic_std"], 
-                         grouped_df["dp_gap_episodic_mean"] + grouped_df["dp_gap_episodic_std"], 
-                         alpha=0.2)
-axes[1, 1].plot(grouped_df["step"], grouped_df["eo_tpr_gap_episodic_mean"], label="EO TPR Gap")
-axes[1, 1].fill_between(grouped_df["step"], 
-                         grouped_df["eo_tpr_gap_episodic_mean"] - grouped_df["eo_tpr_gap_episodic_std"], 
-                         grouped_df["eo_tpr_gap_episodic_mean"] + grouped_df["eo_tpr_gap_episodic_std"], 
-                         alpha=0.2)
-axes[1, 1].plot(grouped_df["step"], grouped_df["eo_fpr_gap_episodic_mean"], label="EO FPR Gap")
-axes[1, 1].fill_between(grouped_df["step"], 
-                         grouped_df["eo_fpr_gap_episodic_mean"] - grouped_df["eo_fpr_gap_episodic_std"], 
-                         grouped_df["eo_fpr_gap_episodic_mean"] + grouped_df["eo_fpr_gap_episodic_std"], 
-                         alpha=0.2)
-axes[1, 1].set_title("Baseline - Group Fairness (DP and EO Gaps)")
-axes[1, 1].set_xlabel("Training Steps")
-axes[1, 1].set_ylabel("Gap")
-axes[1, 1].grid(True)
-axes[1, 1].legend()
+# Plot 3: Consistency (initial)
+mean_col = "indiv_fairness_consistency_initial_mean"
+std_col = "indiv_fairness_consistency_initial_std"
+axes[2].plot(grouped["step"], grouped[mean_col], label="Consistency (Initial)")
+axes[2].fill_between(grouped["step"], 
+                     grouped[mean_col] - grouped[std_col],
+                     grouped[mean_col] + grouped[std_col], alpha=0.2)
+axes[2].set_title("Consistency Fairness (Initial)")
+axes[2].set_ylabel("Consistency")
+axes[2].set_xlabel("Training Timesteps")
+axes[2].legend()
+axes[2].yaxis.set_major_formatter(FormatStrFormatter('%.6f'))
 
 plt.tight_layout()
+os.makedirs("report_plots", exist_ok=True)
 plt.savefig("report_plots/baseline_combined.png")
-plt.show()
+plt.close()
+
+final_stats = df_all[df_all['step'] == df_all['step'].max()]
+summary = final_stats[metrics_to_summarize].agg(['mean', 'std']).transpose().reset_index()
+summary.columns = ['metric', 'mean', 'std']
+os.makedirs("report_metrics", exist_ok=True)
+summary.to_csv('report_metrics/baseline_summary.csv', index=False)
+
+
+
+
 
 
 ### Lambda sweeps
+sns.set_theme(style="whitegrid")
 
-# Directory containing lambda sweep metrics
-metrics_dir = 'metrics/'
-lambda_values = [0.0, 1.0, 5.0]
+lambda_values = [1.0, 5.0, 10.0]
 seeds = [42, 43, 44]
 
-# Prepare empty dataframe for combined results
-all_metrics = []
+lambda_dfs = {}
 
-# Load and aggregate data across all lambda values and seeds
-for lambda_val in lambda_values:
-    temp_dfs = []
+for lam in lambda_values:
+    df_list = []
     for seed in seeds:
-        file_path = os.path.join(metrics_dir, f'metrics_lambda_{lambda_val}_seed{seed}.csv')
-        df = pd.read_csv(file_path)
-        df['lambda'] = lambda_val  # Add lambda as a column for grouping later
-        temp_dfs.append(df)
-    # Combine all seeds for this lambda
-    combined_df = pd.concat(temp_dfs)
-    all_metrics.append(combined_df)
+        path = f"experiments/metrics/metrics_lambda_fair_{lam}_seed{seed}.csv"
+        df = pd.read_csv(path)
+        df['seed'] = seed
+        df['lambda_fair'] = lam
+        df_list.append(df)
+    lambda_dfs[lam] = pd.concat(df_list)
 
-# Merge all lambdas together
-merged_df = pd.concat(all_metrics)
+colors = sns.color_palette("tab10", len(lambda_values))
+fig, axes = plt.subplots(2, 3, figsize=(22, 12))
 
-# Group by drift setting and step, then calculate mean and std for per-step analysis
-grouped_df = merged_df.groupby(['lambda', 'step']).agg(
-    {
-        "mean_reward_vs_Yproxy": ["mean", "std"],
-        "avg_lipschitz_penalty_train": ["mean", "std"],
-        "lipschitz_on_final": ["mean", "std"],
-        "cfd_on_initial": ["mean", "std"],
-        "consistency_on_initial": ["mean", "std"],
-        "dp_gap_episodic": ["mean", "std"],
-        "eo_tpr_gap_episodic": ["mean", "std"],
-        "eo_fpr_gap_episodic": ["mean", "std"],
-        "drift_pct_capital_gain_grp0": ["mean", "std"],
-        "drift_pct_capital_loss_grp0": ["mean", "std"],
-        "drift_pct_capital_gain_grp1": ["mean", "std"],
-        "drift_pct_capital_loss_grp1": ["mean", "std"]
-    }
-).reset_index()
-
-# Flatten multi-level columns for easier plotting
-grouped_df.columns = ['lambda', 'step', 
-                      'mean_reward_vs_Yproxy_mean', 'mean_reward_vs_Yproxy_std',
-                      "avg_lipschitz_penalty_train_mean", "avg_lipschitz_penalty_train_std", 
-                      "lipschitz_on_final_mean", "lipschitz_on_final_std",
-                      'cfd_on_initial_mean', 'cfd_on_initial_std',
-                      'consistency_on_initial_mean', 'consistency_on_initial_std',
-                      'dp_gap_episodic_mean', 'dp_gap_episodic_std',
-                      'eo_tpr_gap_episodic_mean', 'eo_tpr_gap_episodic_std',
-                      'eo_fpr_gap_episodic_mean', 'eo_fpr_gap_episodic_std',
-                      'drift_pct_capital_gain_grp0_mean', 'drift_pct_capital_gain_grp0_std',
-                      'drift_pct_capital_loss_grp0_mean', 'drift_pct_capital_loss_grp0_std',
-                      'drift_pct_capital_gain_grp1_mean', 'drift_pct_capital_gain_grp1_std',
-                      'drift_pct_capital_loss_grp1_mean', 'drift_pct_capital_loss_grp1_std']
-
-
-# Calculate overall mean and std across all steps for final report
-overall_summary_df = grouped_df.groupby('lambda').agg(
-    {
-        "mean_reward_vs_Yproxy_mean": ["mean", "std"],
-        "avg_lipschitz_penalty_train_mean": ["mean", "std"],
-        "lipschitz_on_final_mean": ["mean", "std"],
-        "cfd_on_initial_mean": ["mean", "std"],
-        "consistency_on_initial_mean": ["mean", "std"],
-        "dp_gap_episodic_mean": ["mean", "std"],
-        "eo_tpr_gap_episodic_mean": ["mean", "std"],
-        "eo_fpr_gap_episodic_mean": ["mean", "std"],
-        "drift_pct_capital_gain_grp0_mean": ["mean", "std"],
-        "drift_pct_capital_loss_grp0_mean": ["mean", "std"],
-        "drift_pct_capital_gain_grp1_mean": ["mean", "std"],
-        "drift_pct_capital_loss_grp1_mean": ["mean", "std"]
-    }
-).reset_index()
-
-# Flatten multi-level columns
-overall_summary_df.columns = ['lambda',
-                             'mean_reward_vs_Yproxy_mean', 'mean_reward_vs_Yproxy_std',
-                             "avg_lipschitz_penalty_train_mean", "avg_lipschitz_penalty_train_std", 
-                             "lipschitz_on_final_mean", "lipschitz_on_final_std",
-                             'cfd_on_initial_mean', 'cfd_on_initial_std',
-                             'consistency_on_initial_mean', 'consistency_on_initial_std',
-                             'dp_gap_episodic_mean', 'dp_gap_episodic_std',
-                             'eo_tpr_gap_episodic_mean', 'eo_tpr_gap_episodic_std',
-                             'eo_fpr_gap_episodic_mean', 'eo_fpr_gap_episodic_std',
-                             'drift_pct_capital_gain_grp0_mean', 'drift_pct_capital_gain_grp0_std',
-                             'drift_pct_capital_loss_grp0_mean', 'drift_pct_capital_loss_grp0_std',
-                             'drift_pct_capital_gain_grp1_mean', 'drift_pct_capital_gain_grp1_std',
-                             'drift_pct_capital_loss_grp1_mean', 'drift_pct_capital_loss_grp1_std']
-
-# Save overall summary stats to CSV for the final report
-final_summary_file = 'report_metrics/lambda_sweep_summary_with_drift_overall.csv'
-overall_summary_df.to_csv(final_summary_file, index=False)
-
-# Create a single figure with 6 subplots (2x3 grid)
-fig, axes = plt.subplots(2, 3, figsize=(24, 14))
-
-# Plot 1: Mean Reward
-for lambda_val in lambda_values:
-    lambda_df = grouped_df[grouped_df['lambda'] == lambda_val]
-    axes[0, 0].plot(lambda_df["step"], lambda_df["mean_reward_vs_Yproxy_mean"], label=f"λ = {lambda_val}")
-    axes[0, 0].fill_between(lambda_df["step"], 
-                             lambda_df["mean_reward_vs_Yproxy_mean"] - lambda_df["mean_reward_vs_Yproxy_std"], 
-                             lambda_df["mean_reward_vs_Yproxy_mean"] + lambda_df["mean_reward_vs_Yproxy_std"], 
-                             alpha=0.2)
-axes[0, 0].set_title("Lambda Sweep - Mean Reward vs Y_proxy")
-axes[0, 0].set_xlabel("Training Steps")
-axes[0, 0].set_ylabel("Mean Reward")
-axes[0, 0].grid(True)
+# PLOT 1: Overall Success Rate
+for i, lam in enumerate(lambda_values):
+    df = lambda_dfs[lam].groupby("step").agg({
+        "perf_success_rate_overall": ["mean", "std"]
+    }).rolling(window=3, min_periods=1).mean().reset_index()
+    mean_col = "perf_success_rate_overall"
+    axes[0, 0].plot(df["step"], df[(mean_col, "mean")], label=f"λ={lam}", color=colors[i])
+    axes[0, 0].fill_between(df["step"],
+                            df[(mean_col, "mean")] - df[(mean_col, "std")],
+                            df[(mean_col, "mean")] + df[(mean_col, "std")],
+                            alpha=0.2, color=colors[i])
+axes[0, 0].set_title("Overall Success Rate")
+axes[0, 0].set_xlabel("Training Timesteps")
+axes[0, 0].set_ylabel("Success Rate")
 axes[0, 0].legend()
+axes[0, 0].set_ylim(-0.05, 1.05)
 
-# Plot 2: Counterfactual Fairness Disparity (CFD)
-for lambda_val in lambda_values:
-    lambda_df = grouped_df[grouped_df['lambda'] == lambda_val]
-    axes[0, 1].plot(lambda_df["step"], lambda_df["cfd_on_initial_mean"], label=f"λ = {lambda_val}")
-    axes[0, 1].fill_between(lambda_df["step"], 
-                             lambda_df["cfd_on_initial_mean"] - lambda_df["cfd_on_initial_std"], 
-                             lambda_df["cfd_on_initial_mean"] + lambda_df["cfd_on_initial_std"], 
-                             alpha=0.2)
-axes[0, 1].set_title("Lambda Sweep - CFD on Initial States")
-axes[0, 1].set_xlabel("Training Steps")
-axes[0, 1].set_ylabel("CFD")
-axes[0, 1].grid(True)
+# PLOT 2: CFD Initial
+for i, lam in enumerate(lambda_values):
+    df = lambda_dfs[lam].groupby("step").agg({
+        "indiv_fairness_cfd_initial": ["mean", "std"]
+    }).rolling(window=3, min_periods=1).mean().reset_index()
+    mean_col = "indiv_fairness_cfd_initial"
+    axes[0, 1].plot(df["step"], df[(mean_col, "mean")], label=f"λ={lam}", color=colors[i])
+    axes[0, 1].fill_between(df["step"],
+                            df[(mean_col, "mean")] - df[(mean_col, "std")],
+                            df[(mean_col, "mean")] + df[(mean_col, "std")],
+                            alpha=0.2, color=colors[i])
+axes[0, 1].set_title("CFD: Counterfactual Fairness (Initial)")
+axes[0, 1].set_xlabel("Training Timesteps")
+axes[0, 1].yaxis.set_major_formatter(FormatStrFormatter('%.6f'))
+axes[0, 1].set_ylabel("CFD (lower is better)")
 axes[0, 1].legend()
 
-# Plot 3: Consistency
-for lambda_val in lambda_values:
-    lambda_df = grouped_df[grouped_df['lambda'] == lambda_val]
-    axes[0, 2].plot(lambda_df["step"], lambda_df["consistency_on_initial_mean"], label=f"λ = {lambda_val}")
-    axes[0, 2].fill_between(lambda_df["step"], 
-                             lambda_df["consistency_on_initial_mean"] - lambda_df["consistency_on_initial_std"], 
-                             lambda_df["consistency_on_initial_mean"] + lambda_df["consistency_on_initial_std"], 
-                             alpha=0.2)
-axes[0, 2].set_title("Lambda Sweep - Consistency on Initial States")
-axes[0, 2].set_xlabel("Training Steps")
-axes[0, 2].set_ylabel("Consistency")
-axes[0, 2].grid(True)
+# PLOT 3: CFD Final
+for i, lam in enumerate(lambda_values):
+    df = lambda_dfs[lam].groupby("step").agg({
+        "indiv_fairness_cfd_final": ["mean", "std"]
+    }).rolling(window=3, min_periods=1).mean().reset_index()
+    mean_col = "indiv_fairness_cfd_final"
+    axes[0, 2].plot(df["step"], df[(mean_col, "mean")], label=f"λ={lam}", color=colors[i])
+    axes[0, 2].fill_between(df["step"],
+                            df[(mean_col, "mean")] - df[(mean_col, "std")],
+                            df[(mean_col, "mean")] + df[(mean_col, "std")],
+                            alpha=0.2, color=colors[i])
+axes[0, 2].set_title("CFD: Counterfactual Fairness (Final)")
+axes[0, 2].set_xlabel("Training Timesteps")
+axes[0, 2].set_ylabel("CFD (lower is better)")
 axes[0, 2].legend()
 
-# Plot 3: Capital Gain Drift (Group 0)
-for lambda_val in lambda_values:
-    lambda_df = grouped_df[grouped_df['lambda'] == lambda_val]
-    axes[1, 0].plot(lambda_df["step"], lambda_df["drift_pct_capital_gain_grp0_mean"], label=f"λ = {lambda_val}")
-    axes[1, 0].fill_between(lambda_df["step"], 
-                             lambda_df["drift_pct_capital_gain_grp0_mean"] - lambda_df["drift_pct_capital_gain_grp0_std"], 
-                             lambda_df["drift_pct_capital_gain_grp0_mean"] + lambda_df["drift_pct_capital_gain_grp0_std"], 
-                             alpha=0.2)
-axes[1, 0].set_title("Lambda Sweep - Capital Gain Drifft (Group 0)")
-axes[1, 0].set_xlabel("Training Steps")
-axes[1, 0].set_ylabel("% Drift")
-axes[1, 0].grid(True)
+# PLOT 4: Consistency Initial
+for i, lam in enumerate(lambda_values):
+    df = lambda_dfs[lam].groupby("step").agg({
+        "indiv_fairness_consistency_initial": ["mean", "std"]
+    }).rolling(window=3, min_periods=1).mean().reset_index()
+    mean_col = "indiv_fairness_consistency_initial"
+    axes[1, 0].plot(df["step"], df[(mean_col, "mean")], label=f"λ={lam}", color=colors[i])
+    axes[1, 0].fill_between(df["step"],
+                            df[(mean_col, "mean")] - df[(mean_col, "std")],
+                            df[(mean_col, "mean")] + df[(mean_col, "std")],
+                            alpha=0.2, color=colors[i])
+axes[1, 0].set_title("Consistency Fairness (Initial)")
+axes[1, 0].set_xlabel("Training Timesteps")
+axes[1, 0].set_ylabel("Consistency (higher is better)")
+axes[1, 0].yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{x:.6f}'))
 axes[1, 0].legend()
 
-# Plot 3: Capital Gain Drift (Group 1)
-for lambda_val in lambda_values:
-    lambda_df = grouped_df[grouped_df['lambda'] == lambda_val]
-    axes[1, 1].plot(lambda_df["step"], lambda_df["drift_pct_capital_gain_grp1_mean"], label=f"λ = {lambda_val}")
-    axes[1, 1].fill_between(lambda_df["step"], 
-                             lambda_df["drift_pct_capital_gain_grp1_mean"] - lambda_df["drift_pct_capital_gain_grp1_std"], 
-                             lambda_df["drift_pct_capital_gain_grp1_mean"] + lambda_df["drift_pct_capital_gain_grp1_std"], 
-                             alpha=0.2)
-axes[1, 1].set_title("Lambda Sweep - Capital Gain Drifft (Group 1)")
-axes[1, 1].set_xlabel("Training Steps")
-axes[1, 1].set_ylabel("% Drift")
-axes[1, 1].grid(True)
+# PLOT 5: Drift - Capital Gain (averaged across G0 and G1)
+for i, lam in enumerate(lambda_values):
+    df = lambda_dfs[lam].groupby("step").agg({
+        "drift_pct_capital_gain_group_0": ["mean", "std"],
+        "drift_pct_capital_gain_group_1": ["mean", "std"]
+    })
+    
+    # Average across group 0 and group 1
+    df[("drift_avg", "mean")] = (df[("drift_pct_capital_gain_group_0", "mean")] + df[("drift_pct_capital_gain_group_1", "mean")]) / 2
+    df[("drift_avg", "std")] = (df[("drift_pct_capital_gain_group_0", "std")]**2 + df[("drift_pct_capital_gain_group_1", "std")]**2)**0.5 / 2
+
+    df = df.rolling(window=3, min_periods=1).mean().reset_index()
+    
+    axes[1, 1].plot(df["step"], df[("drift_avg", "mean")], label=f"λ={lam}", color=colors[i])
+    axes[1, 1].fill_between(df["step"],
+                            df[("drift_avg", "mean")] - df[("drift_avg", "std")],
+                            df[("drift_avg", "mean")] + df[("drift_avg", "std")],
+                            color=colors[i], alpha=0.2)
+axes[1, 1].set_title("Drift: Capital Gain %")
+axes[1, 1].set_xlabel("Training Timesteps")
+axes[1, 1].set_ylabel("% Change in Capital Gain")
 axes[1, 1].legend()
 
-# Plot 4: Group Fairness (EO and DP gaps)
-for lambda_val in lambda_values:
-    lambda_df = grouped_df[grouped_df['lambda'] == lambda_val]
-    axes[1, 2].plot(lambda_df["step"], lambda_df["dp_gap_episodic_mean"], label=f"DP Gap, λ = {lambda_val}")
-    axes[1, 2].fill_between(lambda_df["step"], 
-                             lambda_df["dp_gap_episodic_mean"] - lambda_df["dp_gap_episodic_std"], 
-                             lambda_df["dp_gap_episodic_mean"] + lambda_df["dp_gap_episodic_std"], 
-                             alpha=0.2)
-axes[1, 2].set_title("Lambda Sweep - Group Fairness (DP Gap)")
-axes[1, 2].set_xlabel("Training Steps")
-axes[1, 2].set_ylabel("Gap")
-axes[1, 2].grid(True)
+# PLOT 6: Drift - Capital Loss (averaged across G0 and G1)
+for i, lam in enumerate(lambda_values):
+    df = lambda_dfs[lam].groupby("step").agg({
+        "drift_pct_capital_loss_group_0": ["mean", "std"],
+        "drift_pct_capital_loss_group_1": ["mean", "std"]
+    })
+    
+    # Average across group 0 and group 1
+    df[("drift_avg", "mean")] = (df[("drift_pct_capital_loss_group_0", "mean")] + df[("drift_pct_capital_loss_group_1", "mean")]) / 2
+    df[("drift_avg", "std")] = (df[("drift_pct_capital_loss_group_0", "std")]**2 + df[("drift_pct_capital_loss_group_1", "std")]**2)**0.5 / 2
+
+    # Smooth
+    df = df.rolling(window=3, min_periods=1).mean().reset_index()
+    
+    axes[1, 2].plot(df["step"], df[("drift_avg", "mean")], label=f"λ={lam}", color=colors[i])
+    axes[1, 2].fill_between(df["step"],
+                            df[("drift_avg", "mean")] - df[("drift_avg", "std")],
+                            df[("drift_avg", "mean")] + df[("drift_avg", "std")],
+                            color=colors[i], alpha=0.2)
+axes[1, 2].set_title("Drift: Capital Loss %")
+axes[1, 2].set_xlabel("Training Timesteps")
+axes[1, 2].set_ylabel("% Change in Capital Loss")
 axes[1, 2].legend()
 
+
 plt.tight_layout()
-plt.savefig("report_plots/lambda_sweep_combined_with_drift.png")
-plt.show()
+os.makedirs("report_plots", exist_ok=True)
+plt.savefig("report_plots/lambda_sweep_combined.png")
+plt.close()
+
+summary_rows = []
+metrics_to_summarize = [
+    "perf_success_rate_overall",
+    "indiv_fairness_cfd_initial",
+    "indiv_fairness_cfd_final",
+    "indiv_fairness_consistency_initial",
+    "indiv_fairness_consistency_final",
+    "drift_pct_capital_gain_group_0",
+    "drift_pct_capital_gain_group_1",
+    "drift_pct_capital_loss_group_0",
+    "drift_pct_capital_loss_group_1"
+]
+
+for lam in lambda_values:
+    df = lambda_dfs[lam]
+    final_step = df['step'].max()
+    final_df = df[df['step'] == final_step]
+    summary = final_df[metrics_to_summarize].agg(['mean', 'std']).transpose().reset_index()
+    summary.columns = ['metric', 'mean', 'std']
+    summary['lambda_fair'] = lam
+    summary_rows.append(summary)
+
+summary_df = pd.concat(summary_rows, ignore_index=True)
+summary_df = summary_df[['lambda_fair', 'metric', 'mean', 'std']]  # reorder columns
+
+summary_df.to_csv("report_metrics/lambda_sweep_summary.csv", index=False)
+
+
+
+
 
 
 #### DRIFT
 
-# Directory containing drift sweep metrics
-metrics_dir = 'metrics/'
-drift_settings = [(0.0, 0.0), (5.0, 5.0), (10.0, 10.0), (20.0, 20.0)]
-seeds = [42, 43, 44]
+drift_levels = ["low", "medium", "high"]
+seeds = [43, 44, 45]
+base_path = "experiments/metrics"
+rolling_window = 3
 
-# Prepare empty dataframe for combined results
-all_metrics = []
+metrics_to_plot = {
+    "perf_success_rate_overall": "Success Rate (Overall)",
+    "avg_lipschitz_penalty_train": "Lipschitz Penalty",
+    "indiv_fairness_consistency_initial": "Consistency (Initial)",
+    "indiv_fairness_consistency_final": "Consistency (Final)",
+    "indiv_fairness_cfd_initial": "CFD (Initial)",
+    "indiv_fairness_cfd_final": "CFD (Final)",
+}
 
-# Load and aggregate data across all drift settings and seeds
-for gain_pct, loss_pct in drift_settings:
-    temp_dfs = []
-    drift_name = f"{{'capital_gain_pct'_{gain_pct},'capital_loss_pct'_{loss_pct}}}"
+all_data = {}
+for drift in drift_levels:
+    dfs = []
     for seed in seeds:
-        file_path = os.path.join(metrics_dir, f"metrics_drift_{{'capital_gain_pct'_{gain_pct},'capital_loss_pct'_{loss_pct}}}_seed{seed}.csv")
-        df = pd.read_csv(file_path)
-        df['drift_setting'] = drift_name  # Add drift setting as a column for grouping later
-        temp_dfs.append(df)
-    # Combine all seeds for this drift setting
-    combined_df = pd.concat(temp_dfs)
-    all_metrics.append(combined_df)
+        filename = f"metrics_drift_logic_{drift}_drift_seed{seed}.csv"
+        filepath = os.path.join(base_path, filename)
+        if os.path.exists(filepath):
+            df = pd.read_csv(filepath)
+            df["seed"] = seed
+            dfs.append(df)
+    if dfs:
+        combined = pd.concat(dfs, ignore_index=True)
+        all_data[drift] = combined
 
-# Merge all drift settings together
-merged_df = pd.concat(all_metrics)
+summary_data = {}
+for drift, df in all_data.items():
+    grouped = df.groupby("step")
+    agg_df = grouped[list(metrics_to_plot.keys())].agg(['mean', 'std'])
+    agg_df.columns = ['_'.join(col).strip() for col in agg_df.columns.values]
+    agg_df = agg_df.reset_index()
+    agg_df = agg_df.rolling(window=rolling_window, min_periods=1).mean()
+    summary_data[drift] = agg_df
 
-# Group by drift setting and step, then calculate mean and std for per-step analysis
-grouped_df = merged_df.groupby(['drift_setting', 'step']).agg(
-    {
-        "mean_reward_vs_Yproxy": ["mean", "std"],
-        "avg_lipschitz_penalty_train": ["mean", "std"],
-        "cfd_on_initial": ["mean", "std"],
-        "consistency_on_initial": ["mean", "std"],
-        "dp_gap_episodic": ["mean", "std"],
-        "eo_tpr_gap_episodic": ["mean", "std"],
-        "eo_fpr_gap_episodic": ["mean", "std"],
-        "drift_pct_capital_gain_grp0": ["mean", "std"],
-        "drift_pct_capital_loss_grp0": ["mean", "std"],
-        "drift_pct_capital_gain_grp1": ["mean", "std"],
-        "drift_pct_capital_loss_grp1": ["mean", "std"]
-    }
-).reset_index()
+summary_rows = []
 
-# Flatten multi-level columns for easier plotting
-grouped_df.columns = ['drift_setting', 'step', 
-                      'mean_reward_vs_Yproxy_mean', 'mean_reward_vs_Yproxy_std',
-                      "avg_lipschitz_penalty_train_mean", "avg_lipschitz_penalty_train_std", 
-                      'cfd_on_initial_mean', 'cfd_on_initial_std',
-                      'consistency_on_initial_mean', 'consistency_on_initial_std',
-                      'dp_gap_episodic_mean', 'dp_gap_episodic_std',
-                      'eo_tpr_gap_episodic_mean', 'eo_tpr_gap_episodic_std',
-                      'eo_fpr_gap_episodic_mean', 'eo_fpr_gap_episodic_std',
-                      'drift_pct_capital_gain_grp0_mean', 'drift_pct_capital_gain_grp0_std',
-                      'drift_pct_capital_loss_grp0_mean', 'drift_pct_capital_loss_grp0_std',
-                      'drift_pct_capital_gain_grp1_mean', 'drift_pct_capital_gain_grp1_std',
-                      'drift_pct_capital_loss_grp1_mean', 'drift_pct_capital_loss_grp1_std']
+for drift, df in all_data.items():
+    for metric, label in metrics_to_plot.items():
+        values = df[metric]
+        summary_rows.append({
+            "drift_level": drift,
+            "metric": metric,
+            "label": label,
+            "mean": values.mean(),
+            "std": values.std()
+        })
 
+summary_df = pd.DataFrame(summary_rows)
 
-# Calculate overall mean and std across all steps for final report
-overall_summary_df = grouped_df.groupby('drift_setting').agg(
-    {
-        "mean_reward_vs_Yproxy_mean": ["mean", "std"],
-        "avg_lipschitz_penalty_train_mean": ["mean", "std"],
-        "cfd_on_initial_mean": ["mean", "std"],
-        "consistency_on_initial_mean": ["mean", "std"],
-        "dp_gap_episodic_mean": ["mean", "std"],
-        "eo_tpr_gap_episodic_mean": ["mean", "std"],
-        "eo_fpr_gap_episodic_mean": ["mean", "std"],
-        "drift_pct_capital_gain_grp0_mean": ["mean", "std"],
-        "drift_pct_capital_loss_grp0_mean": ["mean", "std"],
-        "drift_pct_capital_gain_grp1_mean": ["mean", "std"],
-        "drift_pct_capital_loss_grp1_mean": ["mean", "std"]
-    }
-).reset_index()
+summary_out_path = "report_metrics/drift_sweep_summary.csv"
+summary_df.to_csv(summary_out_path, index=False)
 
-# Flatten multi-level columns
-overall_summary_df.columns = ['drift_setting',
-                             'mean_reward_vs_Yproxy_mean', 'mean_reward_vs_Yproxy_std',
-                             "avg_lipschitz_penalty_train_mean", "avg_lipschitz_penalty_train_std", 
-                             'cfd_on_initial_mean', 'cfd_on_initial_std',
-                             'consistency_on_initial_mean', 'consistency_on_initial_std',
-                             'dp_gap_episodic_mean', 'dp_gap_episodic_std',
-                             'eo_tpr_gap_episodic_mean', 'eo_tpr_gap_episodic_std',
-                             'eo_fpr_gap_episodic_mean', 'eo_fpr_gap_episodic_std',
-                             'drift_pct_capital_gain_grp0_mean', 'drift_pct_capital_gain_grp0_std',
-                             'drift_pct_capital_loss_grp0_mean', 'drift_pct_capital_loss_grp0_std',
-                             'drift_pct_capital_gain_grp1_mean', 'drift_pct_capital_gain_grp1_std',
-                             'drift_pct_capital_loss_grp1_mean', 'drift_pct_capital_loss_grp1_std']
-
-# Save overall summary stats to CSV for the final report
-final_summary_file = 'report_metrics/drift_sweep_summary_overall.csv'
-overall_summary_df.to_csv(final_summary_file, index=False)
-
-# Plotting Drift Sweep Results
-plt.figure(figsize=(24, 18))
-
-# Plot 1: Mean Reward
-plt.subplot(3, 2, 1)
-for drift_name in grouped_df['drift_setting'].unique():
-    df = grouped_df[grouped_df['drift_setting'] == drift_name]
-    plt.plot(df['step'], df['mean_reward_vs_Yproxy_mean'], label=drift_name)
-    plt.fill_between(df['step'], df['mean_reward_vs_Yproxy_mean'] - df['mean_reward_vs_Yproxy_std'],
-                     df['mean_reward_vs_Yproxy_mean'] + df['mean_reward_vs_Yproxy_std'], alpha=0.2)
-plt.title('Drift Sweep - Mean Reward vs Y_proxy')
-plt.xlabel('Training Steps')
-plt.ylabel('Mean Reward')
-plt.legend()
-plt.grid(True)
-
-# Plot 2: CFD on Initial States
-plt.subplot(3, 2, 2)
-for drift_name in grouped_df['drift_setting'].unique():
-    df = grouped_df[grouped_df['drift_setting'] == drift_name]
-    plt.plot(df['step'], df['cfd_on_initial_mean'], label=drift_name)
-    plt.fill_between(df['step'], df['cfd_on_initial_mean'] - df['cfd_on_initial_std'],
-                     df['cfd_on_initial_mean'] + df['cfd_on_initial_std'], alpha=0.2)
-plt.title('Drift Sweep - CFD on Initial States')
-plt.xlabel('Training Steps')
-plt.ylabel('CFD')
-plt.legend()
-plt.grid(True)
-
-# Plot 2: consistency on Initial States
-plt.subplot(3, 2, 3)
-for drift_name in grouped_df['drift_setting'].unique():
-    df = grouped_df[grouped_df['drift_setting'] == drift_name]
-    plt.plot(df['step'], df['consistency_on_initial_mean'], label=drift_name)
-    plt.fill_between(df['step'], df['consistency_on_initial_mean'] - df['consistency_on_initial_std'],
-                     df['consistency_on_initial_mean'] + df['consistency_on_initial_std'], alpha=0.2)
-plt.title('Drift Sweep - Consistency on Initial States')
-plt.xlabel('Training Steps')
-plt.ylabel('Consistency')
-plt.legend()
-plt.grid(True)
-
-plt.subplot(3, 2, 4)
-for drift_name in grouped_df['drift_setting'].unique():
-    df = grouped_df[grouped_df['drift_setting'] == drift_name]
-    plt.plot(df['step'], df['dp_gap_episodic_mean'], label=drift_name)
-    plt.fill_between(df['step'], df['dp_gap_episodic_mean'] - df['dp_gap_episodic_std'],
-                     df['dp_gap_episodic_mean'] + df['dp_gap_episodic_std'], alpha=0.2)
-plt.title('Drift Sweep - DP Gap')
-plt.xlabel('Training Steps')
-plt.ylabel('Gap')
-plt.legend()
-plt.grid(True)
-
-plt.subplot(3, 2, 5)
-for drift_name in grouped_df['drift_setting'].unique():
-    df = grouped_df[grouped_df['drift_setting'] == drift_name]
-    plt.plot(df['step'], df['avg_lipschitz_penalty_train_mean'], label=drift_name)
-    plt.fill_between(df['step'], df['avg_lipschitz_penalty_train_mean'] - df['avg_lipschitz_penalty_train_std'],
-                     df['avg_lipschitz_penalty_train_mean'] + df['avg_lipschitz_penalty_train_std'], alpha=0.2)
-plt.title('Drift Sweep - Average Lipschitz Penalty')
-plt.xlabel('Training Steps')
-plt.ylabel('Lipschitz Penalty')
-plt.legend()
-plt.grid(True)
-
-plt.tight_layout()
-plt.savefig("report_plots/drift_sweep_combined.png")
-plt.show()
-
-# Create a single figure with 2 subplots (1x2 grid)
-fig, axes = plt.subplots(1, 2, figsize=(24, 14))
-# Plot 3: Capital Gain Drift (Group 0)
-for drift_name in grouped_df['drift_setting'].unique():
-    df = grouped_df[grouped_df['drift_setting'] == drift_name]
-    axes[0].plot(df["step"], df["drift_pct_capital_gain_grp0_mean"], label=drift_name)
-    axes[0].fill_between(df["step"], 
-                             df["drift_pct_capital_gain_grp0_mean"] - df["drift_pct_capital_gain_grp0_std"], 
-                             df["drift_pct_capital_gain_grp0_mean"] + df["drift_pct_capital_gain_grp0_std"], 
-                             alpha=0.2)
-axes[0].set_title("Lambda Sweep - Capital Gain Drifft (Group 0)")
-axes[0].set_xlabel("Training Steps")
-axes[0].set_ylabel("% Drift")
-axes[0].grid(True)
-axes[0].legend()
-
-# Plot 3: Capital Gain Drift (Group 1)
-for drift_name in grouped_df['drift_setting'].unique():
-    df = grouped_df[grouped_df['drift_setting'] == drift_name]
-    axes[1].plot(df["step"], df["drift_pct_capital_gain_grp1_mean"], label=drift_name)
-    axes[1].fill_between(df["step"], 
-                             df["drift_pct_capital_gain_grp1_mean"] - df["drift_pct_capital_gain_grp1_std"], 
-                             df["drift_pct_capital_gain_grp1_mean"] + df["drift_pct_capital_gain_grp1_std"], 
-                             alpha=0.2)
-axes[1].set_title("Lambda Sweep - Capital Gain Drifft (Group 1)")
-axes[1].set_xlabel("Training Steps")
-axes[1].set_ylabel("% Drift")
-axes[1].grid(True)
-axes[1].legend()
-
-plt.tight_layout()
-plt.savefig("report_plots/drift_sweep_drift.png")
-plt.show()
-
-### PENALTY PARAMETER SWEEPS
-
-# Directory containing fairness regularization parameter sensitivity metrics
-metrics_dir = 'metrics/'
-batch_sizes = [32, 128]
-weighted_fracs = [0.0, 0.5, 1.0]
-seeds = [42, 43, 44]
-
-def load_metrics(file_pattern, batch_size=None, weighted_frac=None):
-    temp_dfs = []
-    for seed in seeds:
-        file_path = os.path.join(metrics_dir, file_pattern.format(seed=seed))
-        df = pd.read_csv(file_path)
-        if batch_size is not None:
-            df['batch_size'] = batch_size
-            df['weighted_frac'] = 1.0  # Default for batch size sweeps
-        if weighted_frac is not None:
-            df['weighted_frac'] = weighted_frac
-            df['batch_size'] = 128  # Default for weighted_frac sweeps
-        temp_dfs.append(df)
-    return pd.concat(temp_dfs)
-
-# Load batch size sweep (default weighted_frac=1.0)
-all_metrics = []
-for batch_size in batch_sizes:
-    batch_df = load_metrics(f'metrics_batch_size_pairs_{batch_size}_seed{{seed}}.csv', batch_size=batch_size)
-    all_metrics.append(batch_df)
-
-# Load weighted_frac sweep (default batch_size_pairs=128)
-for weighted_frac in weighted_fracs:
-    weighted_df = load_metrics(f'metrics_weighted_frac_{weighted_frac}_seed{{seed}}.csv', weighted_frac=weighted_frac)
-    all_metrics.append(weighted_df)
-
-# Combine all data
-merged_df = pd.concat(all_metrics)
-
-# Group by parameter settings and step, then calculate mean and std for per-step analysis
-grouped_df = merged_df.groupby(['batch_size', 'weighted_frac', 'step']).agg(
-    {
-        "consistency_on_initial": ["mean", "std"],
-        "cfd_on_initial": ["mean", "std"],
-        "lipschitz_on_final": ["mean", "std"],
-        "dp_gap_episodic": ["mean", "std"],
-        "eo_tpr_gap_episodic": ["mean", "std"],
-        "eo_fpr_gap_episodic": ["mean", "std"],
-        "mean_reward_vs_Yproxy": ["mean", "std"]
-    }
-).reset_index()
-
-# Flatten multi-level columns for easier plotting
-grouped_df.columns = ['batch_size', 'weighted_frac', 'step',
-                      'consistency_on_initial_mean', 'consistency_on_initial_std',
-                      'cfd_on_initial_mean', 'cfd_on_initial_std',
-                      'lipschitz_on_final_mean', 'lipschitz_on_final_std',
-                      'dp_gap_episodic_mean', 'dp_gap_episodic_std',
-                      'eo_tpr_gap_episodic_mean', 'eo_tpr_gap_episodic_std',
-                      'eo_fpr_gap_episodic_mean', 'eo_fpr_gap_episodic_std',
-                      'mean_reward_vs_Yproxy_mean', 'mean_reward_vs_Yproxy_std']
-
-# Save summary stats to CSV
-summary_file = 'report_metrics/fairness_reg_sensitivity_summary.csv'
-grouped_df.to_csv(summary_file, index=False)
-
-# Calculate overall mean and std across all steps for final report
-overall_summary_df = grouped_df.groupby(['batch_size', 'weighted_frac']).agg(
-    {
-        "consistency_on_initial_mean": ["mean", "std"],
-        "cfd_on_initial_mean": ["mean", "std"],
-        "lipschitz_on_final_mean": ["mean", "std"],
-        "dp_gap_episodic_mean": ["mean", "std"],
-        "eo_tpr_gap_episodic_mean": ["mean", "std"],
-        "eo_fpr_gap_episodic_mean": ["mean", "std"],
-        "mean_reward_vs_Yproxy_mean": ["mean", "std"]
-    }
-).reset_index()
-
-# Flatten multi-level columns
-overall_summary_df.columns = ['batch_size', 'weighted_frac',
-                             'consistency_on_initial_mean', 'consistency_on_initial_std',
-                             'cfd_on_initial_mean', 'cfd_on_initial_std',
-                             'lipschitz_on_final_mean', 'lipschitz_on_final_std',
-                             'dp_gap_episodic_mean', 'dp_gap_episodic_std',
-                             'eo_tpr_gap_episodic_mean', 'eo_tpr_gap_episodic_std',
-                             'eo_fpr_gap_episodic_mean', 'eo_fpr_gap_episodic_std',
-                             'mean_reward_vs_Yproxy_mean', 'mean_reward_vs_Yproxy_std']
-
-# Save overall summary stats to CSV for the final report
-final_summary_file = 'report_metrics/fairness_reg_sensitivity_summary_overall.csv'
-overall_summary_df.to_csv(final_summary_file, index=False)
-
-# Plot metrics with line plots
-metrics_to_plot = ['consistency_on_initial_mean', 'cfd_on_initial_mean', 'lipschitz_on_final_mean']
-plt.figure(figsize=(18, 16))
-
-for i, metric in enumerate(metrics_to_plot, 1):
-    plt.subplot(3, 1, i)
-    valid_combinations = [(32, 1.0), (128, 0.0), (128, 0.5), (128, 1.0)]
+# Plot
+plt.figure(figsize=(18, 12))
+for i, (metric, label) in enumerate(metrics_to_plot.items(), 1):
+    plt.subplot(3, 2, i)
+    for drift in drift_levels:
+        df = summary_data[drift]
+        steps = df["step"]
+        mean = df[f"{metric}_mean"]
+        std = df[f"{metric}_std"]
+        plt.plot(steps, mean, label=f"{drift.title()} Drift")
+        plt.fill_between(steps, mean - std, mean + std, alpha=0.2)
     
-    for batch_size, weighted_frac in valid_combinations:
-        sub_df = grouped_df[(grouped_df['batch_size'] == batch_size) & (grouped_df['weighted_frac'] == weighted_frac)]
-        plt.plot(sub_df['step'], sub_df[metric], label=f"Batch {batch_size}, WF {weighted_frac}")
-        plt.fill_between(sub_df['step'], 
-                         sub_df[metric] - sub_df[metric.replace('_mean', '_std')],
-                         sub_df[metric] + sub_df[metric.replace('_mean', '_std')],
-                         alpha=0.2)
-    
-    plt.title(metric.replace('_mean', '').replace('_', ' ').title())
-    plt.xlabel("Training Steps")
-    plt.ylabel(metric.split('_')[0].title())
+    plt.title(label)
+    plt.xlabel("Training Timesteps")
+    plt.ylabel(label)
+    plt.grid(True, alpha=0.3)
     plt.legend()
 
 plt.tight_layout()
-plt.savefig("report_plots/fairness_reg_sensitivity_lineplots.png")
+plot_path = "report_plots/plot_drift_sweeps.png"
+plt.savefig(plot_path)
+print(f"Saved final plot at: {plot_path}")
+plt.show()
+
+
+
+
+
+### PENALTY PARAMETER SWEEPS
+experiments = {
+    "Batch 32 WF 1.0": "metrics_batch_size_pairs_32_seed42.csv",
+    "Batch 128 WF 0.0": "metrics_weighted_frac_0.0_seed42.csv",
+    "Batch 128 WF 0.5": "metrics_weighted_frac_0.5_seed42.csv",
+    "Batch 128 WF 1.0": "metrics_weighted_frac_1.0_seed42.csv",
+}
+
+base_path = "experiments/metrics"
+
+metrics_to_plot = {
+    "perf_success_rate_overall": "Success Rate (Overall)",
+    "avg_lipschitz_penalty_train": "Lipschitz Penalty",
+    "indiv_fairness_consistency_initial": "Consistency (Initial)",
+    "indiv_fairness_cfd_initial": "CFD (Initial)",
+    "indiv_fairness_cfd_final": "CFD (Final)",
+    "drift_pct_capital_gain_group_0": "Capital Gain Drift (Avg)",
+    "drift_pct_capital_gain_group_1": "Capital Gain Drift (Avg)",
+}
+
+summary_rows = []
+all_data = {}
+
+for label, filename in experiments.items():
+    filepath = os.path.join(base_path, filename)
+    df = pd.read_csv(filepath)
+    all_data[label] = df
+
+    for metric, display in metrics_to_plot.items():
+        if "Capital Gain Drift" in display:
+            continue  
+        values = df[metric]
+        summary_rows.append({
+            "experiment": label,
+            "metric": metric,
+            "label": display,
+            "mean": values.mean(),
+            "std": values.std()
+        })
+
+    gain_0 = df["drift_pct_capital_gain_group_0"]
+    gain_1 = df["drift_pct_capital_gain_group_1"]
+    gain_avg = (gain_0 + gain_1) / 2
+    summary_rows.append({
+        "experiment": label,
+        "metric": "capital_gain_drift_avg",
+        "label": "Capital Gain Drift (Avg)",
+        "mean": gain_avg.mean(),
+        "std": gain_avg.std()
+    })
+
+summary_df = pd.DataFrame(summary_rows)
+summary_df.to_csv("report_metrics/param_sweep_summary.csv", index=False)
+
+plot_metrics = [
+    "perf_success_rate_overall",
+    "avg_lipschitz_penalty_train",
+    "indiv_fairness_consistency_initial",
+    "indiv_fairness_cfd_initial",
+    "indiv_fairness_cfd_final",
+    "capital_gain_drift_avg"
+]
+
+label_map = {row["metric"]: row["label"] for row in summary_rows}
+
+plt.figure(figsize=(18, 12))
+for i, metric in enumerate(plot_metrics, 1):
+    plt.subplot(3, 2, i)
+    for label, df in all_data.items():
+        if metric == "capital_gain_drift_avg":
+            y = ((df["drift_pct_capital_gain_group_0"] + df["drift_pct_capital_gain_group_1"]) / 2).rolling(window=3, min_periods=1).mean()
+            std = ((df["drift_pct_capital_gain_group_0"] + df["drift_pct_capital_gain_group_1"]) / 2).rolling(window=3, min_periods=1).std()
+        else:
+            y = df[metric].rolling(window=3, min_periods=1).mean()
+            std = df[metric].rolling(window=3, min_periods=1).std()
+        steps = df["step"]
+        plt.plot(steps, y, label=label)
+        plt.fill_between(steps, y - std, y + std, alpha=0.2)
+
+    plt.title(label_map[metric])
+    plt.xlabel("Training Timesteps")
+    plt.ylabel(label_map[metric])
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+
+plt.tight_layout()
+plt.savefig("report_plots/plot_sweep_params.png")
 plt.show()
