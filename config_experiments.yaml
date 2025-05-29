@@ -34,9 +34,9 @@ rewards:
 ###  Model & Training Hyperparameters 
 training:
   seeds: [42, 43, 44] # Define seeds here
-  total_timesteps: 25000
+  total_timesteps: 30000
   device: 'auto'
-  max_episode_steps: 10
+  max_episode_steps: 30
 
 # K-Nearest Neighbors settings for finding similar pairs
 knn_settings:
@@ -46,19 +46,19 @@ knn_settings:
 ###  Evaluation Settings 
 evaluation:
   eval_freq: 500                      # Run this entire evaluation process every 500 training steps.
-  n_eval_episodes: 50                 # Number of episodes to run to get a stable measure of the agent's reward.
+  n_eval_episodes: 100                 # Number of episodes to run to get a stable measure of the agent's reward.
 
 
 # FairDQN specific hyperparameters
 fair_dqn_params:
   learning_rate: 0.001          # Controls how large of a step the optimizer takes during training. A smaller value leads to slower but potentially more stable learning.
   buffer_size: 100000           # The maximum number of recent experiences (state, action, reward, next_state) to store in the replay buffer.
-  learning_starts: 5000         # The number of random steps to take to fill the buffer before the agent starts learning. This ensures initial training batches are diverse.
+  learning_starts: 10000         # The number of random steps to take to fill the buffer before the agent starts learning. This ensures initial training batches are diverse.
   batch_size: 256               # The number of experiences to sample from the replay buffer for each training update.
   train_freq: 1                 # How often to update the model. A value of 1 means one training update is performed after every single step in the environment.
   gradient_steps: 1             # The number of gradient descent updates to perform each time `train_freq` is met.
   target_update_interval: 1000  # The frequency (in timesteps) at which the weights of the "target network" are updated. This is a key technique for stabilizing DQN training.
-  exploration_fraction: 0.1     # The fraction of the total training time over which the exploration rate (epsilon) will linearly decrease from its initial to its final value.
+  exploration_fraction: 0.2     # The fraction of the total training time over which the exploration rate (epsilon) will linearly decrease from its initial to its final value.
   exploration_initial_eps: 1.0  # The starting value for epsilon. A value of 1.0 means the agent starts by taking completely random actions to explore the environment.
   exploration_final_eps: 0.05   # The final, minimum value for epsilon. The agent will always have at least a 5% chance of taking a random action, which prevents it from getting stuck.
   tau: 0.005                    # The "soft update" parameter for the target network. A value of 1.0 means it's a "hard update" (a direct copy), which is standard with `target_update_interval`.
